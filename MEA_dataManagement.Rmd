@@ -1,0 +1,969 @@
+---
+title: "Data analysis of 32 MEA on Arabidopsis leaves"
+output: html_notebook
+author: Juan Camilo Barbosa Caro
+editor_options: 
+  chunk_output_type: console
+---
+
+# 0. Libraries and functions
+```{r}
+home = getwd()
+#
+library("rhdf5")
+library("tidyr")
+library("dplyr")
+library("ggplot2")
+library("gsignal")
+library("magick")
+library(reticulate)
+# library instructions browseVignettes("rhdf5")
+
+pick.stream <- function(trace0, trace1){
+  # Pick the stream with the data
+  traces.all = NULL
+  answer <- readline (prompt="Which stream has the data? Enter [0] or [1] ")
+  while ( nchar(answer) > 0){ #answer != "0" && answer != "1"
+    
+    if (answer == "0") {
+      # put in dataframe
+      traces.all = data.frame("time" = time0, traces0)
+      print("Stream 0 saved")
+      # trace.plot = gather(traces.all, "e", "V", 2:ncol(traces.all))
+      # plot <- ggplot(trace.plot, aes(time, V, col = e) ) +
+      #         geom_line()
+      # print(plot)
+      break
+    } else if (answer == "1") {
+      traces.all = data.frame("time" = time1, traces1)
+      print("Stream 1 saved")
+      #trace.plot = gather(traces.all, "e", "V", 2:ncol(traces.all))
+      #plot <- ggplot(trace.plot, aes(time, V, col = e) ) +
+              geom_line()
+      #print(plot)
+      break
+    } else {
+      print("Not valid input")
+      answer <- readline (prompt="Enter [0] or [1] to pick a stream ")
+    }
+  } 
+  return(traces.all)
+} # still need this?
+normalize.trace <- function( trace.in, bl.endFrame ){
+  baseline = mean( trace.in[1:bl.endFrame] )
+  trace.out = trace.in - baseline
+  return(trace.out)
+}
+save.ask <- function() {
+  answer <- readline (prompt="Press [y] to save; [n] to skip    ")
+  while ( nchar(answer) > 0 ){
+    if (answer == "y") {
+      return("y")
+      break
+    } else if (answer == "n") {
+      return("n")
+      break
+    } else {
+      print("Not valid input")
+      answer <- readline (prompt="Press [y] to save; [n] to skip ")
+    }
+  } 
+}
+calculateslope <- function(vector) {
+  slopetrace = NULL
+  for( i in 2:length(vector)){
+    slopei = vector[i]-vector[i-1]
+    slopetrace = append(slopetrace, slopei)  
+  }
+  slopetrace = append(slopetrace, slopetrace[length(slopetrace)])
+  return(slopetrace)
+}
+findSWPvalues <- function(time, trace, start.frame){ 
+  ### Set reference time 0 when stimulus is applied: at second 90 for convention
+  stimFrame = which(round(time,2) == 0 )
+  samplerate = length(time)/( time[length(time)] - time[1])
+  
+  ### Filter signal
+  #trace[which(trace < -150)] = trace[1] # DO I NEED THIS FOR THE 32-MEA Make extreme values equal baseline. It's when the electrode looses contact.
+  # smooth with Savitzky-Golay filter.
+  # n is the amount of point befor/after the nth point to be averaged
+  # p is the filter order. Dont know what that is.
+  trace = sgolayfilt(na.omit(trace) , p = 1, n = 91)
+  trace = na.omit(trace) ## if not filtering, just omit NaNs
+  
+  
+  # plot(trace, type = "l") + abline(v=stimFrame)
+  # plot(trace, type = "l") + abline(v=start.frame)
+  
+
+
+
+                        ### Initial baseline
+  bl = mean(trace[ 1:(start.frame-2)]) # average from 0 to before stimFrame
+
+  
+  ### Find peak depolarization
+  maxDepol = min(   na.omit( trace[ start.frame:length(trace) ] )   ) # find peak depol. It's extracellular recording, so depol goes to negative
+  
+  depolFrame = min( which(trace == maxDepol)  )# Find frame at maximum depol 
+  # plot(trace, type = "l") + abline(v=depolFrame) 
+  
+
+  
+       ### hyperpol.amplitude
+  ### Find peak of first hyperpolarization between stimulus and depol peak
+  maxHyperpol = max(  na.omit(trace[ start.frame : depolFrame ])   )
+  hyperpolFrame = min( which(trace == maxHyperpol) )# Find frame at maximum hyperpol
+  hyperpol.amplitude = maxHyperpol-bl
+  # plot(trace, type = "l") + abline(v=hyperpolFrame) 
+  
+  
+  
+                        ### depol.amplitude
+  depol.amplitude = maxDepol - abs(maxHyperpol) # Calculate max depol from the peak of hyperpol rather than from the initial baseline
+  
+  
+  
+  
+                        ### minDepolrate frame
+
+  # find the peak slope at depol part of the trace
+  # focus on the chunk between max hyperpol an max depol
+  depolTrace = trace[hyperpolFrame:depolFrame] # plot(depolTrace) 
+  depoltrace.firstderivative = calculateslope(depolTrace) # plot(depoltrace.firstderivative)
+  min.depol.rate =  min(depoltrace.firstderivative)
+  min.slope.frame = min( which(depoltrace.firstderivative == min.depol.rate) )+hyperpolFrame#+stimFrame
+  # plot(trace, type = "l") + abline(v=min.slope.frame) 
+  
+# to find half max frame, substract the halfMax V from the trace and pick the closest to 0.
+  # min.slope.frame = min (
+  #   which (  abs((depolTrace)-halfDepol ) == min( abs((depolTrace)-halfDepol))  )  ## Find the time at Halfdepol
+  # ) #+ stimFrame 
+  
+  
+  
+                     ### find half maximum (bl to depol)
+  
+  halfMaxDepol = bl - abs( (maxDepol - bl)/2 )
+  halfMaxFrame = min( which( abs(depolTrace-halfMaxDepol) <= min(abs(depolTrace-halfMaxDepol)) ) ) + hyperpolFrame
+  # plot(abs(depolTrace-halfMaxDepol))
+  # plot(trace, type = "l") + abline(v=halfMaxFrame) 
+  
+
+                      ### max hyperpol rate
+  
+  # focus on the chunk between max hyperpol an max depol
+  hyperpolTrace = trace[start.frame: hyperpolFrame] # checks the trace 20s before the peak hyperpol. plot(hyperpolTrace)
+  hyperpoltrace.firstderivative = calculateslope(hyperpolTrace) # plot(hyperpoltrace.firstderivative)
+  max.hyperpol.rate = max(hyperpoltrace.firstderivative)
+  ### Save time of max slope
+  max.slope.frame = min( which(hyperpoltrace.firstderivative == max.hyperpol.rate) ) + start.frame
+  #  plot(hyperpolTrace) + abline(v=max.slope.frame) 
+  # plot(trace, type = "l") + abline(v=max.slope.frame) 
+  
+                      ### hyperpol.duration from max hyperpol slope to min depol slope
+  
+  hyperpol.duration = time[min.slope.frame] - time[max.slope.frame]
+  
+                          ### second baseline
+  ### Find second baseline i.e. after repolarization
+  bl2 = mean(trace[   (length(trace)-(60*samplerate) ): length(trace)   ])
+  
+  
+  
+  
+                        ### repol.amplitude
+    # focus on repolarization part of the trace
+  repolTrace = trace[(depolFrame+1):length(trace)] # plot(repolTrace)
+  maxRepol = max(repolTrace) # maximum repolarization
+  maxRepolframe = min( which(repolTrace == maxRepol) ) +depolFrame+1
+  repol.amplitude = maxRepol-bl2 # Find hyperpolarization amplitude in the recovery phase
+  # former maxHyperpol2
+  # plot(trace, type = "l") + abline(v=maxRepolframe) 
+  
+                        ### maxRepol/2 frame
+  halfRepol = maxRepol + ((maxDepol-maxRepol)/2) # bl2 + (maxDepol - bl2)/2 # 
+  halfRepolframe =  min( which( abs(repolTrace-halfRepol) <= min(abs(repolTrace-halfRepol)) ) ) + depolFrame +1
+    # plot(trace, type = "l") + abline(v=halfRepolframe) 
+  
+                            ### Depolarization duration
+  #Time from halfmax raise and decay        
+  depDur = time[halfRepolframe ] - time[min.slope.frame]
+  
+
+  
+  #return all these
+  SWPvalues = data.frame(
+  bl,
+  stimFrame,
+  max.hyperpol.rate,
+  max.slope.frame,
+  maxHyperpol,
+  hyperpol.amplitude,
+  hyperpol.duration,
+  
+  min.depol.rate,
+  min.slope.frame,
+  halfMaxFrame,
+  depolFrame,
+  maxDepol,
+  depol.amplitude,
+  depDur,
+  
+  maxRepol, 
+  halfRepolframe,
+  repol.amplitude,
+  
+  bl2
+ 
+  
+  )
+  return(SWPvalues)
+  #return( list(trace, SWPvalues))
+  
+} # time- time vector; trace- voltage vector in mV!; start.frame - define 15 s before hyperpol peak before signal start
+encode_MEA <- function(){
+    # Determine the arbitrary order of electrodes in the 32-MEA. 
+  MEA_E6basipetal = list("rowX" = c("E1","E2","E3","E4","E5","E17","E28","E29","E30","E31","E32"),
+                         "rowY" = c("E6","E7","E8","E9","E10",NaN,"E23","E24","E25","E26","E27"),
+                         "rowZ" = c("E11","E12","E13","E14","E15","E16","E18","E19","E20","E21","E22") )
+  # is it is rotated 180 degrees, the organization is inverted in x and y axes. 
+  MEA_E6acropetal = rev(MEA_E6basipetal)
+  MEA_E6acropetal[[1]] = rev(MEA_E6acropetal[[1]])
+  MEA_E6acropetal[[2]] = rev(MEA_E6acropetal[[2]])
+  MEA_E6acropetal[[3]] = rev(MEA_E6acropetal[[3]])
+  # As convention, the A1,B1,C1 will correspond to the electrodes more basipetal. NEXT pick which disposition of the MEA was used
+  # ask whether E6 is basipetal or acropetal
+  cat("Is E6 acropetal (a) or basipetal (b)?")
+  answer <- readline()
+        while ( nchar(answer) > 0 ){
+          if (answer == "a") {
+            MEA = MEA_E6acropetal
+            break
+          }
+          else if (answer == "b") {
+            MEA = MEA_E6basipetal
+            break
+          }
+          else {
+            print("Not valid input. ")
+            answer <- readline (prompt="Is E6 acropetal (a) or basipetal (b)?")
+          }
+        } 
+
+  # Initialize an empty list to store key-value pairs
+  arraykey1 <- list()
+  # Generate key-value pairs
+  rows = c("A","B","C")
+  row_count = 1
+  for (r in names(MEA) ){
+    for (i in 1:11) {
+      key <- MEA[[r]][i]  # Generate the corresponding value
+      value <- paste0(rows[row_count],"_", i)  # Concatenate "A" with the number
+      arraykey1[[key]] <- value  # Add the key-value pair to the list
+    }
+    row_count = row_count+1
+  }
+  return(arraykey1)
+}
+omit_electrodes <- function(array){
+  cat("Remove electrodes? type X_#,Y_#... or (n) to omit ")
+  answer <- readline()
+        while ( nchar(answer) > 0 ){
+          if (answer == "n") {
+            break
+          }
+          else {
+            remove.electrodes = as.vector( strsplit(answer,",") )[[1]]
+            print("removed electrodes " )
+            print(remove.electrodes )
+            remove.rows = which( ( unique(array$electrode) %in% remove.electrodes)==TRUE )
+            array[remove.rows,2:ncol(array)] = NaN
+            break
+          }
+        }
+  return(array)
+}
+```
+
+The name of the .h5 raw files should have the following structure, which is mostly the automatic output of the MCS software.
+yyyy-mm-ddThh-mm-ssxxxx_D-00042.h5 
+where: 
+xxxx should be changed to the genotype of the plant recorded. Any extra information in the file name should be erase.
+
+1. Open and plot .h5 raw data 
+
+# 1.1 Setup data manipulation specifications
+input - Manually write here specifications of the analysis
+output- creates a folder where to save all the analyzed files and plots
+```{r}
+foldername = "230823-analysis"
+batchfolder = paste(home,foldername,sep = "/")
+#downsample.to = 100 # provide the Hz you want your data to be downsampled to. NULL for skip downsample.
+stim.time = 90 # seconds at which wound is done.
+# if ( !dir.exists(batchfolder) ){
+#   dir.create(batchfolder)
+# }
+```
+
+
+# 1.2 Run the MCS_dataManagement.py. Opens, downsamples to 100 Hz and saves.
+"/Users/j/Documents/GitHub/MCS-data_analysis/MCS_dataManager.py"
+input   - All the ".h5" files in the home folder of this project.
+output  - a "Python-analysis" folder with ">savename<.csv" files with units s and mV.
+
+# 1.3 Normalize to baseline, set array orientation, plot and save
+input   - The "Python-analysis" with ">savename<.csv" files from 1.2
+output  - Change the name of the "Python-analysis" folder to >batchfolder<.There, plot overlay of all the electrodes as ">savename<.pdf"
+```{r}
+setwd(home)
+if ( dir.exists("Python-analysis") ){
+  file.rename("Python-analysis", foldername)
+} else {
+  print("No Python-analysis folder")
+}
+setwd(batchfolder)
+files = list.files()[grep(".csv", list.files())]
+for (f in files){
+  print(f)
+  traces.all = read.csv(f)
+  savename = substr(f,1,nchar(f)-4)
+  genotype = substr(f,20,nchar(f)-4)
+  
+          # change name of electrodes by convention code
+  # determine orientation of the array on the leaf
+  MEA_key = encode_MEA()
+  names(traces.all) = chartr(old = "X",new = "E",x = names(traces.all) ) # standardize nomenclature
+  for (i in 2:(length(names(traces.all))-1) ) {
+   names(traces.all)[i] = MEA_key[[names(traces.all)[i]]] 
+  }
+
+  # go through all the columns and normalize them to their baseline. Do it better to the V at 5 s before max hyperpol.
+        # determine the frame at beginning of hyperpol
+  to = which(traces.all$A_1 == min(traces.all$A_1)) # electrode A1, frame of peak depol.
+  maxHyperpol = which(traces.all$A_1 == max(traces.all$A_1[1:to])) # frame of peak hyperpol from start to peak depol.
+  # plot(traces.all$time[1:to], traces.all$A_1[1:to]) +
+  #   abline(v = traces.all$time[maxHyperpol] ) +
+  #   abline(v = traces.all$time[maxHyperpol-150] )
+  normalize.point = maxHyperpol-150 # that point minus 15s
+           
+  # Now normalize
+  for( c in 2:33){
+    traces.all[,c] = traces.all[,c]-traces.all[normalize.point,c]
+  }
+  # save genotype and other data in the dataframe
+  traces.all$genotype = genotype
+  write.csv(traces.all, paste(savename,".csv",sep = ""), row.names = FALSE)
+    # downsample for plotting.
+  trace.plot = NULL
+  for( c in 1:(ncol(traces.all)-1) ){
+    trace.plot =  cbind( trace.plot, downsample( traces.all[,c] , 10 ) )
+  }
+  trace.plot = data.frame(trace.plot)
+  names(trace.plot) = names(traces.all)[1:33]
+  trace.plot = gather( na.omit(trace.plot) , "e", "mV", 2:33)
+  plot <- ggplot(trace.plot, aes(time, mV, col = e) ) +
+    geom_line()
+  print(plot)
+  #if( save.ask() == "y"){
+    ggsave(paste(savename,".pdf",sep = ""), plot = plot)
+  #}
+        
+}
+setwd(home) 
+```
+
+
+# 2. Get data through the SWPanalyzer.
+input   - The ">savename<.csv" files from 1.2
+output  - a >savename< folder with: "array_SWPparameters.csv" file with the dataframe containing all the parameters for each electrode. "A_#.pdf" file for each electrode and its analysis. Also plots for each electrode trace.
+```{r}
+setwd(batchfolder)
+files = list.files()[grep(".csv", list.files())]
+for (f in files){
+    # load file
+  print(f)
+  traces.all = read.csv(f)
+  traces.all$time =  traces.all$time - 90
+  trace.plot = gather( na.omit(traces.all) , "e", "mV", 2:33)
+  time = traces.all$time
+    # create folder fot this plant
+  plant_folder = paste(batchfolder,"/",substr(f,1,nchar(f)-4),"-plots",sep = "")
+  if(dir.exists(plant_folder) == FALSE){
+    dir.create( plant_folder )
+  }
+  array_SWPparameters = data.frame()
+    # Loop through all the electrodes
+  for (c in 2:33 ){
+    if( getwd() != plant_folder ){
+        setwd(plant_folder)
+    }
+  
+    electrode = names(traces.all)[c]
+    savename = paste(substr(f,1,nchar(f)-4)," e-", electrode,sep = "")
+    print(electrode)
+    trace = traces.all[,c]
+      # determine the frame at 15 s prior to hyperpol peak
+    to =  which(trace == min(trace[(90*samplerate):length(trace)])) 
+    to = min( to[ which(to  > (90*samplerate) ) ] )
+    from = which(trace[(to-(90*samplerate)):to] == max(trace[(to-(90*samplerate)):to]) ) + to-(105*samplerate) # start.frame = from
+    plot(trace,type="l") + abline(h =  max(trace[(to-(90*samplerate)):to]) ) + abline(v= from )
+    #  
+    ##
+    ###
+    SWPvalues = findSWPvalues(time = time, trace = trace, start.frame =  from)
+    ###
+    ##
+    #
+    
+      ### PLOT
+    par(mfrow = c(1, 1)) # make one plots
+    pdf( paste(electrode,".pdf",sep = "") )
+    plot(x = traces.all$time, y = traces.all[,c] , type = "l", main = savename, ) + # ylim=c(-100,40)
+    abline(h = SWPvalues$bl, col="black", lty = 2) +
+    abline(v = traces.all$time[SWPvalues$min.slope.frame], col="red") +
+    abline(v = traces.all$time[SWPvalues$halfMaxFrame], col="green", lty = 2) +
+    abline(v = traces.all$time[SWPvalues$max.slope.frame], col="red") +
+    abline(v = traces.all$time[SWPvalues$depolFrame], col="red", lty = 2) +
+    abline(v = traces.all$time[SWPvalues$halfRepolframe], col="green") +
+    abline(h = SWPvalues$maxDepol, col = "red") +
+    abline(h = SWPvalues$maxHyperpol, col = "blue") +
+    abline(h = SWPvalues$maxRepol, col = "blue") +
+    abline(h = SWPvalues$bl2, col="green", lty = 2) +
+    abline(v = 0, col="black", lty = 2)
+    dev.off()
+      # compile all parameters of all electrodes in one df.
+    array_SWPparameters= rbind( array_SWPparameters, cbind(electrode, SWPvalues)  )
+  }
+  # save the parameters of this plant. and go back to the batchfolder
+  write.csv(array_SWPparameters,"array_SWPparameters.csv", row.names = FALSE)
+  setwd(batchfolder)
+}
+setwd(home)
+print("Done. Continue with # 3")
+# # remove problematic electrodes. 
+# setwd(batchfolder)
+# traces.all = read.csv(f)
+# traces.all$C_8 = traces.all$C_10
+# write.csv(traces.all, f, row.names = FALSE )
+## then remove all the .csv files already done and restart the chunk
+```
+Make movie with analysis plots? B1-11 - not finished
+```{r}
+# MAKE MOVIEEE with the row B
+axis.lim = NULL
+for (c in grep( "B", names(traces.all))  ){
+  electrode = names(traces.all)[c]
+  print(electrode)
+  trace = traces.all[,c]
+  SWPvalues = findSWPvalues(time = time, trace = trace)
+  if(is.null(axis.lim) ){
+    axis.lim = c( (SWPvalues$maxDepol*1.5),  (SWPvalues$maxRepol*1.5) )
+  }
+    ### PLOT
+  par(mfrow = c(1, 1)) # make one plots
+  png( paste(electrode,".png",sep = "") )
+  plotTitle = paste(savename,electrode, sep = ".")
+  plot(x = traces.all$time, y = traces.all[,c] , type = "l", main = plotTitle, 
+       ylim=axis.lim ) +
+  abline(h = SWPvalues$bl, col="black", lty = 2) +
+  abline(v = traces.all$time[SWPvalues$min.slope.frame], col="red") +
+  abline(v = traces.all$time[SWPvalues$max.slope.frame], col="red") +
+  abline(v = traces.all$time[SWPvalues$halfRepolframe], col="green") +
+  abline(h = SWPvalues$maxDepol, col = "red") +
+  abline(h = SWPvalues$maxHyperpol, col = "blue") +
+  abline(h = SWPvalues$maxRepol, col = "blue") +
+  abline(h = SWPvalues$bl2, col="green", lty = 2) +
+  abline(v = 0, col="black", lty = 2) 
+  dev.off()
+
+    
+    # compile all parameters of all electrodes in one df.
+  array_SWPparameters= rbind( array_SWPparameters, cbind(electrode, SWPvalues)  )
+
+}
+imgs <- c("B_1.png", "B_2.png", "B_3.png", "B_4.png","B_5.png", "B_7.png", "B_8.png", "B_9.png", "B_10.png", "B_11.png")
+img_list <- lapply(imgs, image_read)
+img_joined <- image_join(img_list)
+img_animated <- image_animate(img_joined, fps = 4)
+img_animated
+```
+
+
+# 3. Do heatmap for selected parameters and calculate correlation.
+Data is normalized to the minimum value for plotting. That makes the pattern better visualized. Correlation is unaffected by normalization.
+input   - The "array_SWPparameters.csv" files from 2.
+output  - ">parameter<.pdf" plots of the heatmaps of all the parameters. "spatial.correlation.csv" file with the spearman correlation test, to both MEA dimensions, for all parameters
+```{r}
+setwd(batchfolder)
+# Loop through all these parameters
+parameter2plot = c("bl",
+                   "hyperpol.amplitude",
+                   "hyperpol.duration",
+                   "max.slope.frame",
+                   
+                   "depol.amplitude",
+                   "depDur",
+                   "min.depol.rate",
+                   "min.slope.frame",
+                   "halfMaxFrame",
+                   "depolFrame",
+                   
+                   "repol.amplitude",
+                   "halfRepolframe",
+                   
+                   "maxHyperpol",
+                   "maxRepol",
+                   "bl2"
+                   
+                   )
+# Load array file of one plant
+folders = list.dirs()
+for (f in folders[2:length(list.dirs())]){
+  setwd(f)
+  print(f)
+  array_SWPparameters = read.csv( "array_SWPparameters.csv" )
+  # check for repeated electrode data
+  if ( nrow(array_SWPparameters) > 32){
+   array_SWPparameters <-  array_SWPparameters[!duplicated(array_SWPparameters$electrode),]
+  }
+  
+  # omit certain electrodes
+  #array_SWPparameters = omit_electrodes(array_SWPparameters)
+  cat("Remove electrodes? type X_#,Y_#... or (n) to omit ")
+  answer <- readline()
+  while ( nchar(answer) > 0 ){
+    if (answer == "n") {
+      break
+    }
+    else if( length(grep(",", answer)) > 0 ) {
+      remove.electrodes = as.vector( strsplit(answer,",") )[[1]]
+      remove.rows = which( ( unique(array_SWPparameters$electrode) %in% remove.electrodes)==TRUE )
+      array_SWPparameters[remove.rows,2:ncol(array_SWPparameters)] = NaN
+      print("removed electrodes " )
+      print(remove.electrodes )
+      break
+    } else {
+      cat("Remove electrodes? type X_#,Y_#... or (n) to omit ")
+      answer <- readline()
+    }
+  }
+
+  # separate electrode name in row and col if not done yet
+  if( length(grep("number", names(array_SWPparameters))) ==0 ){
+      array_SWPparameters = separate(array_SWPparameters, electrode, c("row","number"), sep = "_")
+      array_SWPparameters$number = as.numeric(array_SWPparameters$number)
+      # Normalize time/frame variables
+  }
+
+  # loop through parameters
+  spatial.correlation = data.frame()
+  spatial.correlation.trans = data.frame()
+  spatial.correlation.long = data.frame()# create df for correlation results for all parameters
+  normalized_SWPparameters = array_SWPparameters
+  for(p in parameter2plot ){
+    parameter = p
+    # Normalize to the minimum parameter
+    normalized_SWPparameters[,p] =  normalized_SWPparameters[,p] - min (na.omit(normalized_SWPparameters[,p] ) )
+    # determine correlation with rows or columns
+    spearman.test.long = cor.test( normalized_SWPparameters$number, normalized_SWPparameters[,p], method = "spearman" )
+    spatial.correlation = rbind( spatial.correlation, data.frame( "parameter"= p,
+                                                                  "dimension"= "longitudinal",
+                                                                   "rho" = round( spearman.test.long$estimate, 4 ) ,
+                                                                   "p.val"= round( spearman.test.long$p.value, 4 ) ))
+    test.insumo = normalized_SWPparameters$row
+    test.insumo = replace(test.insumo, which(test.insumo=="A"), 1) 
+    test.insumo = replace(test.insumo, which(test.insumo=="B"), 2)
+    test.insumo = replace(test.insumo, which(test.insumo=="C"), 3)
+    test.insumo =  as.numeric(test.insumo)
+    spearman.test.trans = cor.test( test.insumo, normalized_SWPparameters[,p], method = "spearman" )
+    spatial.correlation = rbind( spatial.correlation, data.frame( "parameter"= p,
+                                                                  "dimension"= "transversal",
+                                                                   "rho" = round( spearman.test.trans$estimate, 4) ,
+                                                                   "p.val"= round( spearman.test.trans$p.value, 4) ))
+    
+      # Plot in heatmap. # https://r-charts.com/correlation/heat-map-ggplot2/
+    ggplot(normalized_SWPparameters, aes(number, row))+
+      geom_tile(aes(fill= normalized_SWPparameters[,p])) +
+      coord_flip() +
+      xlab (paste("Rho=",round(spearman.test.long$estimate,3), 
+                  " p.val=",round(spearman.test.long$p.value,3),sep = "")) +
+      ylab (paste("Rho=",round(spearman.test.trans$estimate,3), 
+                  " p.val=",round(spearman.test.trans$p.value,3),sep = "")) +
+      coord_fixed() + # make tiles square
+      scale_fill_gradient2(low = "#2D1115",
+                           mid = "#D81B60",
+                           high = "#1A85FF") + # Change color
+      labs(fill = parameter) +
+      scale_y_discrete(limits=rev) +
+      scale_x_continuous(breaks = c(1:11)) +
+      theme(
+          axis.text.x = element_text(color = "black", size = 20, angle = 0, hjust = 0.5, vjust = 0.5, face = "plain"),
+          axis.text.y = element_text(color = "black", size = 20, angle = 0, hjust = 0 , vjust = 0.5, face = "plain"),
+          axis.title.x = element_text(color = "black", size = 10, angle = 0, hjust = 0.5, vjust = 0, face = "plain"), # element_blank(), #
+          axis.title.y = element_text(color = "black", size = 10, angle = 90, hjust = 0.5, vjust = 0, face = "plain"),#element_blank(),
+          plot.title = element_text(color = "black", size = 20, angle = 0, hjust = 0.5, vjust = 0, face = "bold"),
+          legend.text = element_text(size = 20),
+          legend.title = element_text(hjust = 0.1, size = 20),
+          panel.grid.major.y = element_blank(),
+          panel.grid.minor.y = element_blank(),
+          panel.grid.major.x = element_blank(), #element_line()
+          panel.grid.minor.x = element_blank(),
+          panel.background = element_blank()) 
+    ggsave(paste("heatmap_",parameter,".pdf",sep = ""))
+  }
+  # SAVE HERE THE ARRAY MODIFIED DATAFRAME
+  write.csv(array_SWPparameters,"array_SWPparameters.csv", row.names = FALSE)
+  write.csv(normalized_SWPparameters,"normalized_SWPparameters.csv", row.names = FALSE)
+  write.csv(spatial.correlation,"spatial.correlation.csv", row.names = FALSE)
+  setwd(batchfolder)
+}
+setwd(home)
+print("Done. Continue with # 4")
+```
+
+
+
+# 4. Calculate propagation speed and signal duration. 
+input - The "array_SWPparameters.csv" files from 2. Put the folders in manually.
+output - "speeds.csv" with speed calculated with 2 parameters and by 2 methods. "durations.csv" with the mean duration of all the electrodes for each plant. "data.stats.csv" with the mean ± SEM for all the previous parameters.
+```{r}
+setwd(batchfolder)
+genotypes = c("slah3-3") #,"slah3-3", "col0","msl10-1","slah3-1"
+data.stats = NULL
+for (g in genotypes){
+  folders = list.dirs()[grep(g, list.dirs())]
+  speeds = NULL
+  durations = NULL
+  for (f in folders[1:length(folders)]){
+    setwd(f)
+    savename = substr(f, start = 3, stop = (nchar(f)-6))
+    array_SWPparameters = read.csv("array_SWPparameters.csv" ) # "normalized_SWPparameters.csv" "array_SWPparameters.csv"
+    
+    # Get max slope frames. each electrode col is 1.5mm/0.15cm away. units here are cm and s 
+    speed.insumo = data.frame(row= array_SWPparameters$row ,
+                             location = ((array_SWPparameters$number-1)*0.15), 
+                             min.slope.frame = (array_SWPparameters$min.slope.frame/samplerate),
+                             halfMaxframe = (array_SWPparameters$halfMaxFrame /samplerate),
+                             depDur = (array_SWPparameters$depDur) ) %>% na.omit()
+    
+    # calculate slope by regression and by 2 points
+    for (p in which(names(speed.insumo)%in%c("min.slope.frame","halfMaxframe" )) ){
+        # Speed using Depolarization maximum slope.
+        # calculate using regression
+      model <- lm( speed.insumo$location ~ speed.insumo[,p] )
+      speed.regression = coef(model)[[2]] # cm/s
+       # Plot and save linear regression
+      pdf( paste(names(speed.insumo)[p],"-lin.reg.pdf",sep = "") ) 
+      plot(speed.insumo[,p] , speed.insumo$location, 
+           xlab="time (s)", ylab="distance (cm)",
+           main = names(speed.insumo)[p] )+
+        abline(model, lwd=3) 
+      dev.off()
+    # calculate using first and last columns
+      dT = mean( na.omit( speed.insumo[,p][ which(speed.insumo$location== 1.5) ] )) -
+        mean( na.omit( speed.insumo[ which(speed.insumo$location== 0), p ] ))
+      speed.2point = 1.5 / dT # cm/s
+      speeds = rbind(speeds, data.frame("parameter"=names(speed.insumo[p]),
+                                  speed.regression, 
+                                  speed.2point,
+                                  savename))
+    }
+    # Calculate duration mean of all electrodes.
+    duration = mean(speed.insumo$depDur)
+    SEM = sd(speed.insumo$depDur)/length(speed.insumo$depDur)
+    duration.correlation = cor.test(speed.insumo$location,speed.insumo$depDur)$p.value %>% round(5)
+    duration.rho = cor.test(speed.insumo$location,speed.insumo$depDur)$estimate %>% round(5)
+    durations = rbind(durations, data.frame(duration,
+                                         SEM,
+                                        "cor_p.val"= duration.correlation,
+                                        "rho" = duration.rho,
+                                        savename))
+    setwd(batchfolder)
+  }
+  # put in the data.stats 
+  data.stats = rbind(data.stats, 
+                    data.frame("genotype" = g,
+                              "duration.mean" = mean(durations$duration),
+                              "duration.SEM" = sd(durations$duration)/nrow(durations),
+                              "slope.reg.mean" = mean( speeds$speed.regression[which(speeds$parameter=="min.slope.frame")] ),
+                              "slope.reg.SEM" = sd(speeds$speed.regression[which(speeds$parameter=="min.slope.frame")])/
+                                length(speeds$speed.regression[which(speeds$parameter=="min.slope.frame")]),
+                              "slope.2e.mean" = mean( speeds$speed.2point[which(speeds$parameter=="min.slope.frame")] ),
+                              "slope.2e.SEM" = sd( speeds$speed.2point[which(speeds$parameter=="min.slope.frame")] )/
+                                length(speeds$speed.2point[which(speeds$parameter=="min.slope.frame")]),
+                              "halfMax.reg.mean" = mean( speeds$speed.regression[which(speeds$parameter=="halfMaxframe")] ),
+                              "halfMax.reg.SEM" = sd(speeds$speed.regression[which(speeds$parameter=="halfMaxframe")])/
+                                length(speeds$speed.regression[which(speeds$parameter=="halfMaxframe")]),
+                              "halfMax.2e.mean" = mean( speeds$speed.2point[which(speeds$parameter=="halfMaxframe")] ),
+                              "halfMax.2e.SEM" = sd( speeds$speed.2point[which(speeds$parameter=="halfMaxframe")] )/
+                                length(speeds$speed.2point[which(speeds$parameter=="halfMaxframe")]))
+                        )
+  write.csv(speeds, paste(g,"_speeds.csv",sep=""), row.names = FALSE)
+  write.csv(durations, paste(g,"_durations.csv",sep=""), row.names = FALSE)
+  
+  
+}
+write.csv(data.stats, "data.stats.csv", row.names = FALSE)
+setwd(home)
+
+#mean( speeds$speed.regression[which(speeds$parameter=="min.slope.frame")] )
+```
+
+#
+##
+###
+#### Crunch all the data for one experiment. 
+
+# 5. put together all the calculated parameters for each genotype. get the mean or median? for each parameter in each electrode.
+input - IN THE HOME FOLDER! >genotype< folder with the "array_SWPparameters.csv" file of each plant
+output - A ">genotype<_CompiledParameters.RData" file with a list containing all the parameters of that genotype organized by electrode.
+```{r}
+setwd(home)
+genotypes = c("col0", "msl10-1" , "slah3-3") #,,"slah3-3", "col0","msl10-1" "slah3-1",
+for (g in genotypes){
+  folders = list.dirs()[grep(g, list.dirs())]
+  # create list with an element for each electrode
+  genotype_params = list() 
+  for (f in folders[1:length(folders)]){
+    setwd(f)
+    savename = substr(f, start = 3, stop = (nchar(f)-6))
+    print(savename)
+    
+    # HERE USE normalized or data as is?
+    array_SWPparameters = read.csv( "normalized_SWPparameters.csv" ) # "normalized_SWPparameters.csv" "array_SWPparameters.csv"
+    ###
+    
+    array_SWPparameters = unite(array_SWPparameters, "electrode", 1:2) 
+    # make a list. a dataframe for each electrode
+    # loop through electrodes
+    for(e in 1:32){
+      #print( unique(array_SWPparameters$electrode)[e] )
+      if ( !unique(array_SWPparameters$electrode)[e] %in% names(genotype_params) ){
+        # got it!! it is saving in which ever order and then changing the name. I assumed it'd always open the electrodes in the same order, but not!. now, how allocate data to a part of the list independently?
+        genotype_params$new =  cbind( array_SWPparameters[e,2:ncol(array_SWPparameters)], "plant"=savename)
+        names(genotype_params)[ which(names(genotype_params) == "new") ] = unique(array_SWPparameters$electrode)[e]
+      } else {
+        genotype_params[[ unique(array_SWPparameters$electrode)[e] ]] = 
+          rbind( genotype_params[[unique(array_SWPparameters$electrode)[e]]] , 
+                cbind( array_SWPparameters[e,2:ncol(array_SWPparameters)], "plant"=savename) )
+      }
+    }
+    setwd(home)
+    save(genotype_params, file = paste(g, "_CompiledParameters.RData",  sep="") )
+  }
+}
+```
+
+
+
+# 6. Generate heatmaps and Spearman correlation test for the compiled data of an experimental group - all the plants seeded together.
+input - The >genotype<_CompiledParameters.RData files in the home folder.
+output - heatmaps for the mean  of each parameter for every electrode and every genotype.Also a >genotype<_mean.spatial.correlation.csv file for every genotype. The summary can be changed to the median if desired.
+```{r}
+setwd(home)
+files = list.files()[grep("RData", list.files())]
+for (f in files) {
+  load(f)
+  genotype = genotype_params$C_11$plant[1] %>% substr(20,nchar(genotype_params$C_11$plant[1]))
+  genotype.summary = NULL
+  
+  
+  # sacar promedios/medianas de todo, con SEM/?. columna a columna y guardar en dataframe?
+  for ( e in 1:length(genotype_params) ){
+    e.summary = NULL
+    n = genotype_params[[e]] %>% na.omit() %>% nrow()
+    # get mean
+    e.processing = genotype_params[[e]] %>% 
+      na.omit() %>%
+      mutate(across(1:(ncol(genotype_params[[e]])-1), ~ mean(.x))) # Mean
+    e.summary = rbind( e.summary,
+                       cbind( "statistic" = "mean" , e.processing[1,1:(ncol(genotype_params[[e]])-1)] ) 
+                       )
+    # get SEM
+    e.processing = genotype_params[[e]] %>% 
+      na.omit() %>%
+      mutate(across(1:(ncol(genotype_params[[e]])-1), ~ sd(.x, na.rm=TRUE)/n)) # SEM
+    e.summary = rbind( e.summary, 
+                       cbind( "statistic" = "SEM", e.processing[1,1:(ncol(genotype_params[[e]])-1)] ) 
+                       ) 
+    # get median
+    e.processing = genotype_params[[e]] %>% 
+      na.omit() %>%
+      mutate(across(1:(ncol(genotype_params[[e]])-1), ~ median(.x))) #  Median
+    e.summary = rbind( e.summary,
+                       cbind( "statistic" = "median" , e.processing[1,1:(ncol(genotype_params[[e]])-1)] ) 
+                       )
+    e.summary$genotype = genotype
+    e.summary$electrode = names(genotype_params)[e]
+    e.summary$n = n
+    genotype.summary = rbind(genotype.summary, e.summary)
+  }
+  
+  
+  # Loop through all these parameters
+  # parameter2plot should be defined in #3.
+  #### PICK a statistic to plot!!
+  genotype.summary = separate(genotype.summary, electrode, c("row","number"), sep = "_")
+  genotype.summary$number = as.numeric(genotype.summary$number)
+  genotype.plot.summary = dplyr::filter(genotype.summary, statistic== "mean" ) # decide here what statistic to plot: "mean""median"
+  
+  ## clear variables
+  spatial.correlation.trans = data.frame()
+  spatial.correlation.long = data.frame()
+  spatial.correlation = data.frame()
+  for(p in parameter2plot ){
+    parameter = p
+    # determine correlation with rows or columns
+    spearman.test.long = cor.test( genotype.plot.summary$number, genotype.plot.summary[,p], method = "spearman" ) # "spearman"
+    spatial.correlation = rbind( spatial.correlation, data.frame( "parameter"= p,
+                                                                  "statistic" = genotype.plot.summary$statistic[1],
+                                                                  "dimension"= "longitudinal",
+                                                                   "rho" = round( spearman.test.long$estimate, 4 ) ,
+                                                                   "p.val"= round( spearman.test.long$p.value, 4 ) ,
+                                                                  "n" = genotype.plot.summary$n[1]))
+    test.insumo = genotype.plot.summary$row
+    test.insumo = replace(test.insumo, which(test.insumo=="A"), 1) 
+    test.insumo = replace(test.insumo, which(test.insumo=="B"), 2)
+    test.insumo = replace(test.insumo, which(test.insumo=="C"), 3)
+    test.insumo =  as.numeric(test.insumo)
+    spearman.test.trans = cor.test( test.insumo, genotype.plot.summary[,p], method = "spearman" )
+    spatial.correlation = rbind( spatial.correlation, data.frame( "parameter"= p,
+                                                                  "statistic" = genotype.plot.summary$statistic[1],
+                                                                  "dimension"= "transversal",
+                                                                   "rho" = round( spearman.test.trans$estimate, 4) ,
+                                                                   "p.val"= round( spearman.test.trans$p.value, 4) ,
+                                                                  "n" = genotype.plot.summary$n[1]))
+    
+    # Plot in heatmap. # https://r-charts.com/correlation/heat-map-ggplot2/
+    ggplot(genotype.plot.summary, aes(number, row))+
+      geom_tile(aes(fill= genotype.plot.summary[,p])) +
+      coord_flip() +
+      ggtitle( paste("statistic" = genotype.plot.summary$statistic[1],genotype) ) +
+      xlab (paste("Rho=",round(spearman.test.long$estimate,3), 
+                  " p.val=",round(spearman.test.long$p.value,3),sep = "")) +
+      ylab (paste("Rho=",round(spearman.test.trans$estimate,3), 
+                  " p.val=",round(spearman.test.trans$p.value,3),sep = "")) +
+      coord_fixed() + # make tiles square
+      scale_fill_gradient2(low = "#2D1115",
+                           mid = "#D81B60",
+                           high = "#1A85FF", 
+                           limits = c(min(genotype.plot.summary[,p]),
+                                      max(genotype.plot.summary[,p])) ) + # Change color
+      labs(fill = parameter) +
+      scale_y_discrete(limits=rev) +
+      scale_x_continuous(breaks = c(1:11)) +
+      theme(
+          axis.text.x = element_text(color = "black", size = 20, angle = 0, hjust = 0.5, vjust = 0.5, face = "plain"),
+          axis.text.y = element_text(color = "black", size = 20, angle = 0, hjust = 0 , vjust = 0.5, face = "plain"),
+          axis.title.x = element_text(color = "black", size = 10, angle = 0, hjust = 0.5, vjust = 0, face = "plain"), # element_blank(), #
+          axis.title.y = element_text(color = "black", size = 10, angle = 90, hjust = 0.5, vjust = 0, face = "plain"),#element_blank(),
+          plot.title = element_text(color = "black", size = 20, angle = 0, hjust = 0.5, vjust = 0, face = "bold"),
+          legend.text = element_text(size = 20),
+          legend.title = element_text(hjust = 0.1, size = 20),
+          panel.grid.major.y = element_blank(),
+          panel.grid.minor.y = element_blank(),
+          panel.grid.major.x = element_blank(), #element_line()
+          panel.grid.minor.x = element_blank(),
+          panel.background = element_blank()) 
+    ggsave(paste(genotype, "_",genotype.plot.summary$statistic[1],".heatmap_",parameter,".pdf",sep = ""))
+  }
+  write.csv(spatial.correlation,
+            paste(genotype,"_",genotype.plot.summary$statistic[1],"_spatial.correlation.csv",sep=""), row.names = FALSE)
+
+}
+```
+
+
+###
+##
+# UNDER CONSTRUCTION
+##
+###
+
+# 7. Generate scatter plots and linear model for those variables that have significant correlation in point 6.
+```{r}
+list.files()
+load("slah3-1_CompiledParameters.RData"  )
+# Scatter plot the parameters.
+tst = data.frame()
+
+for(e in 1:length(genotype_params) ){
+  tst = rbind( tst, data.frame( "value"= genotype_params[[e]]$repol.amplitude, 
+                           "electrode" = names(genotype_params)[e], 
+                           "parameter"= "halfMaxFrame",
+                           "plant"    = genotype_params[[e]]$plant)
+              )
+}
+tst = separate(tst, 2, c("row","column"),sep="_")
+tst$column = as.numeric(tst$column)
+# make linear model
+model <- lm( tst$value ~ tst$column )
+model.slope = coef(model)[[2]] # cm/s
+plot(tst$column, tst$value) +
+  abline(model, lwd=3)
+```
+
+
+
+# xx put together .csv files of the same genotype
+```{r}
+setwd(home)
+list.files()
+files = list.files()[grep("csv", list.files())]
+data.compilation = NULL
+for (f in files){
+  data.compilation = rbind(data.compilation, read.csv(f))
+}
+data.compilation
+write.csv(data.compilation, "2312xx.speeds.csv",row.names = FALSE)
+```
+
+# xx make nice plot of electrodes overlay
+```{r}
+list.files()
+traces.all = read.csv("2023-12-14T16-18-16col0.csv")
+# remove electrode
+traces.all = traces.all[,-c(which(names(traces.all)=="C_1"))]
+    # downsample for plotting.
+trace.plot = NULL
+for( c in 1:(ncol(traces.all)) ){
+  trace.plot =  cbind( trace.plot, downsample( traces.all[,c] , 10 ) )
+}
+trace.plot = data.frame(trace.plot)
+names(trace.plot) = c("time", "C_11","C_10","C_09","C_08","C_07","B_11","B_10","B_09","B_08","B_07","A_11","A_10" ,"A_09", "A_08","A_07", "A_06","C_06","A_05", "A_04","A_03","A_02","A_01","B_05","B_04","B_03","B_02","B_01","C_05","C_04","C_03","C_02","genotype")
+
+trace.plot = gather(trace.plot, "e", "mV", 2:(ncol(trace.plot)-1) )
+
+trace.plot = separate(trace.plot, 3, c("row", "column"),sep = "_" )
+trace.plot$column = as.character(trace.plot$column)
+trace.plot$mV = as.numeric(trace.plot$mV)
+trace.plot$time = as.numeric(trace.plot$time)
+trace.plot = dplyr::filter(trace.plot, row == "A")
+
+head(trace.plot)
+
+ggplot( trace.plot, aes(time, mV, col=column) ) +
+  geom_line() +
+  scale_color_manual(values = rainbow(length(unique(trace.plot$column)),start=0,end=0.5 ))+ #'orange', 'pink', 'red','black',
+  #                           'blue','green','purple','turquoise',
+  #                           'yellow','salmon','darkgreen' ))
+  #scale_color_steps(low = "#C1666B", high = "#ADE25D")  +
+  
+  theme(
+      axis.text.x = element_text(color = "black", size = 20, angle = 0, hjust = 0.5, vjust = 0.5, face = "plain"),
+      axis.text.y = element_text(color = "black", size = 20, angle = 0, hjust = 0 , vjust = 0.5, face = "plain"),
+      axis.title.x = element_text(color = "black", size = 20, angle = 0, hjust = 0.5, vjust = 0, face = "plain"), # element_blank(), #
+      axis.title.y = element_text(color = "black", size = 20, angle = 90, hjust = 0.5, vjust = 0, face = "plain"),#element_blank(),
+      plot.title = element_text(color = "black", size = 20, angle = 0, hjust = 0.5, vjust = 0, face = "bold"),
+      legend.text = element_text(size = 20),
+      legend.title = element_text(hjust = 0.1, size = 10),
+      panel.grid.major.y = element_line(),
+      panel.grid.minor.y = element_line(),
+      panel.grid.major.x = element_line(), # element_blank()
+      panel.grid.minor.x = element_blank(),
+      panel.background = element_blank()) 
+
+ggsave("2023-12-14T16-18-16col0.all-line.pdf")
+```
+
