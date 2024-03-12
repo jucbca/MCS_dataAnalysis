@@ -308,7 +308,7 @@ stim.time = 90 # seconds at which wound is done.
 
 
 # 1.2 Run the MCS_dataManagement.py. Opens, downsamples to 100 Hz and saves.
-"/Users/j/Documents/GitHub/MCS-data_analysis/MCS_dataManager.py"
+/Users/j/Documents/GitHub/MCS_dataAnalysis/MCS_dataManager.py
 input   - All the ".h5" files in the home folder of this project.
 output  - a "Python-analysis" folder with ">savename<.csv" files with units s and mV.
 
@@ -625,7 +625,7 @@ print("Done. Continue with # 4")
 
 
 # 4. Calculate propagation speed and signal duration. 
-input - The "array_SWPparameters.csv" files from 2. Put the folders in manually.
+input - The "array_SWPparameters.csv" files from 2. Put the folders into the batchfolder manually.
 output - "speeds.csv" with speed calculated with 2 parameters and by 2 methods. "durations.csv" with the mean duration of all the electrodes for each plant. "data.stats.csv" with the mean ± SEM for all the previous parameters.
 ```{r}
 setwd(batchfolder)
@@ -720,7 +720,7 @@ input - IN THE HOME FOLDER! >genotype< folder with the "array_SWPparameters.csv"
 output - A ">genotype<_CompiledParameters.RData" file with a list containing all the parameters of that genotype organized by electrode.
 ```{r}
 setwd(home)
-genotypes = c("col0", "msl10-1" , "slah3-3") #,,"slah3-3", "col0","msl10-1" "slah3-1",
+genotypes = c("col0","msl10-1"  , "slah3-3") #,,"slah3-3", "col0","msl10-1" "slah3-1",
 for (g in genotypes){
   folders = list.dirs()[grep(g, list.dirs())]
   # create list with an element for each electrode
@@ -730,8 +730,8 @@ for (g in genotypes){
     savename = substr(f, start = 3, stop = (nchar(f)-6))
     print(savename)
     
-    # HERE USE normalized or data as is?
-    array_SWPparameters = read.csv( "normalized_SWPparameters.csv" ) # "normalized_SWPparameters.csv" "array_SWPparameters.csv"
+    # HERE USE normalized data. makes plotting more clear and does not affect the correlation
+    array_SWPparameters = read.csv( "array_SWPparameters.csv" ) # "normalized_SWPparameters.csv"
     ###
     
     array_SWPparameters = unite(array_SWPparameters, "electrode", 1:2) 
@@ -759,7 +759,7 @@ for (g in genotypes){
 
 # 6. Generate heatmaps and Spearman correlation test for the compiled data of an experimental group - all the plants seeded together.
 input - The >genotype<_CompiledParameters.RData files in the home folder.
-output - heatmaps for the mean  of each parameter for every electrode and every genotype.Also a >genotype<_mean.spatial.correlation.csv file for every genotype. The summary can be changed to the median if desired.
+output - heatmaps for the mean  of each parameter for every electrode and every genotype.Also a >genotype<_mean_spatial.correlation.csv file for every genotype. The summary can be changed to the median if desired.
 ```{r}
 setwd(home)
 files = list.files()[grep("RData", list.files())]
@@ -881,27 +881,96 @@ for (f in files) {
 ##
 ###
 
-# 7. Generate scatter plots and linear model for those variables that have significant correlation in point 6.
+# 7. Generate scatter plots, linear model and violin plots for those variables that have significant correlation in point 6. Use normalized data?
 ```{r}
-list.files()
-load("slah3-1_CompiledParameters.RData"  )
+parameter = "repol.amplitude"
+files = list.files()[grep(".RData",list.files())]
+compile.data = data.frame()
+for(f in 1:length(files) ){
+  parameter.data = data.frame()
+  genotype = strsplit(files[f], "_")[[1]][1]
+  load(paste(genotype,"_CompiledParameters.RData",sep = ""  ))
+  print(paste(genotype,"_CompiledParameters.RData",sep = ""  ))
+  p = which(names(genotype_params$C_11) == parameter)
+  for(e in 1:length(genotype_params) ){
+    parameter.data = rbind( parameter.data, data.frame( "value"= genotype_params[[e]][,p], 
+                             "electrode" = names(genotype_params)[e], 
+                             "parameter"= names(genotype_params$C_11)[p],
+                             "plant"    = genotype_params[[e]]$plant)
+                )
+  }
+  parameter.data = separate(parameter.data, 2, c("row","column"),sep="_")
+  parameter.data$column = as.numeric(parameter.data$column)
+    # make linear model
+  model <- lm( parameter.data$value ~ parameter.data$column )
+  model.slope = coef(model)[[2]] # cm/s
 # Scatter plot the parameters.
-tst = data.frame()
-
-for(e in 1:length(genotype_params) ){
-  tst = rbind( tst, data.frame( "value"= genotype_params[[e]]$repol.amplitude, 
-                           "electrode" = names(genotype_params)[e], 
-                           "parameter"= "halfMaxFrame",
-                           "plant"    = genotype_params[[e]]$plant)
-              )
+  pdf(paste(genotype,"_", parameter,"_scatter.pdf",sep = ""))
+  plot(parameter.data$column, parameter.data$value, 
+       main = paste( genotype, parameter) ) +
+  abline(model, lwd=3) 
+  dev.off()
+  compile.data = rbind(compile.data, parameter.data)
 }
-tst = separate(tst, 2, c("row","column"),sep="_")
-tst$column = as.numeric(tst$column)
-# make linear model
-model <- lm( tst$value ~ tst$column )
-model.slope = coef(model)[[2]] # cm/s
-plot(tst$column, tst$value) +
-  abline(model, lwd=3)
+# separate genotype
+genotype = c()
+plant = c()
+for( i in 1:nrow(compile.data)){
+  plant = append(plant, 
+                    compile.data$plant[i] %>% substr(1,19))
+  genotype = append(genotype, 
+                    compile.data$plant[i] %>% substr(20,nchar(compile.data$plant[i]))
+  )
+}
+compile.data$plant = plant
+compile.data$genotype = genotype
+
+# make violin plots
+ggplot(compile.data, aes(genotype, value)) +
+  geom_violin()
+
+compile.data %>% dplyr::filter(genotype=="col0") %>%
+  select(value) %>% na.omit() %>% as.numeric()
+
+shapiro.test(tst)
+
+```
+
+
+## visualize the spatial correlation for all parameters.
+input - the >genotype<_mean_spatial.correlation.csv file
+output - A nice plot
+```{r}
+# visualization of spatial correlation
+files = list.files()[grep(".csv",list.files())]
+spatial.correlation = NULL
+
+for(f in 1:length(files) ){
+  spatial.correlation = rbind(spatial.correlation, 
+                              cbind( read.csv(files[f]), "genotype" = strsplit(files[f], "_")[[1]][1] )
+                              )
+}
+spatial.correlation %>% dplyr::filter(dimension == "longitudinal") %>%
+  ggplot(aes(parameter, rho, fill = genotype)) +
+  geom_col(position=position_dodge()) +
+  geom_text(aes(label = round( p.val, 3) ), position = position_dodge(.9), angle = 90 ) +
+  ggtitle( "Spatial correlation" ) +
+  #labs(fill = parameter) +
+  theme(
+      axis.text.x = element_text(color = "black", size = 20, angle = 300, hjust = 0, vjust = 0, face = "plain"),
+      axis.text.y = element_text(color = "black", size = 20, angle = 0, hjust = 0 , vjust = 0.5, face = "plain"),
+      axis.title.x = element_text(color = "black", size = 10, angle = 0, hjust = 0.5, vjust = 0, face = "plain"), # element_blank(), #
+      axis.title.y = element_text(color = "black", size = 10, angle = 90, hjust = 0.5, vjust = 0, face = "plain"),#element_blank(),
+      plot.title = element_text(color = "black", size = 20, angle = 0, hjust = 0.5, vjust = 0, face = "bold"),
+      legend.text = element_text(size = 20),
+      legend.title = element_text(hjust = 0.1, size = 20),
+      panel.grid.major.y = element_blank(),
+      panel.grid.minor.y = element_blank(),
+      panel.grid.major.x = element_blank(), #element_line()
+      panel.grid.minor.x = element_blank(),
+      panel.background = element_blank()) 
+ggsave("spatial.correlation.pdf")
+
 ```
 
 
@@ -916,7 +985,7 @@ for (f in files){
   data.compilation = rbind(data.compilation, read.csv(f))
 }
 data.compilation
-write.csv(data.compilation, "2312xx.speeds.csv",row.names = FALSE)
+write.csv(data.compilation, "2308xx.speeds.csv",row.names = FALSE)
 ```
 
 # xx make nice plot of electrodes overlay
