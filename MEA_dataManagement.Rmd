@@ -990,35 +990,35 @@ write.csv(data.compilation, "2308xx.speeds.csv",row.names = FALSE)
 
 # xx make nice plot of electrodes overlay
 ```{r}
-list.files()
-traces.all = read.csv("2023-12-14T16-18-16col0.csv")
+list.files( )
+traces.all = read.csv( "2023-12-14T16-18-16col0.csv"  )
+
 # remove electrode
-traces.all = traces.all[,-c(which(names(traces.all)=="C_1"))]
+#traces.all = traces.all[,-c(which(names(traces.all)=="C_6"))]
+col.names = names(traces.all)
     # downsample for plotting.
 trace.plot = NULL
 for( c in 1:(ncol(traces.all)) ){
   trace.plot =  cbind( trace.plot, downsample( traces.all[,c] , 10 ) )
 }
 trace.plot = data.frame(trace.plot)
-names(trace.plot) = c("time", "C_11","C_10","C_09","C_08","C_07","B_11","B_10","B_09","B_08","B_07","A_11","A_10" ,"A_09", "A_08","A_07", "A_06","C_06","A_05", "A_04","A_03","A_02","A_01","B_05","B_04","B_03","B_02","B_01","C_05","C_04","C_03","C_02","genotype")
+names(trace.plot) = col.names
 
 trace.plot = gather(trace.plot, "e", "mV", 2:(ncol(trace.plot)-1) )
 
 trace.plot = separate(trace.plot, 3, c("row", "column"),sep = "_" )
-trace.plot$column = as.character(trace.plot$column)
+trace.plot$column = as.numeric(trace.plot$column)
 trace.plot$mV = as.numeric(trace.plot$mV)
 trace.plot$time = as.numeric(trace.plot$time)
 trace.plot = dplyr::filter(trace.plot, row == "A")
 
 head(trace.plot)
+tail(trace.plot)
 
 ggplot( trace.plot, aes(time, mV, col=column) ) +
   geom_line() +
-  scale_color_manual(values = rainbow(length(unique(trace.plot$column)),start=0,end=0.5 ))+ #'orange', 'pink', 'red','black',
-  #                           'blue','green','purple','turquoise',
-  #                           'yellow','salmon','darkgreen' ))
-  #scale_color_steps(low = "#C1666B", high = "#ADE25D")  +
-  
+  #scale_color_manual(values = rainbow(length(unique(trace.plot$column)),start=0,end=0.5 ))+ #'orange', 'pink', 'red','black','blue','green','purple','turquoise', 'yellow','salmon','darkgreen' ))
+  scale_color_steps(low = "#66C0E1", high = "#E41138")  +
   theme(
       axis.text.x = element_text(color = "black", size = 20, angle = 0, hjust = 0.5, vjust = 0.5, face = "plain"),
       axis.text.y = element_text(color = "black", size = 20, angle = 0, hjust = 0 , vjust = 0.5, face = "plain"),
@@ -1033,6 +1033,6 @@ ggplot( trace.plot, aes(time, mV, col=column) ) +
       panel.grid.minor.x = element_blank(),
       panel.background = element_blank()) 
 
-ggsave("2023-12-14T16-18-16col0.all-line.pdf")
+ggsave("2023-12-14T16-18-16col0.pdf")
 ```
 
