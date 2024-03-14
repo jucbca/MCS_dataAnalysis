@@ -957,7 +957,7 @@ spatial.correlation %>% dplyr::filter(dimension == "longitudinal") %>%
   ggtitle( "Spatial correlation" ) +
   #labs(fill = parameter) +
   theme(
-      axis.text.x = element_text(color = "black", size = 20, angle = 300, hjust = 0, vjust = 0, face = "plain"),
+      axis.text.x = element_text(color = "black", size = 20, angle = 300, hjust = 0, vjust = 0.5, face = "plain"),
       axis.text.y = element_text(color = "black", size = 20, angle = 0, hjust = 0 , vjust = 0.5, face = "plain"),
       axis.title.x = element_text(color = "black", size = 10, angle = 0, hjust = 0.5, vjust = 0, face = "plain"), # element_blank(), #
       axis.title.y = element_text(color = "black", size = 10, angle = 90, hjust = 0.5, vjust = 0, face = "plain"),#element_blank(),
