@@ -45,7 +45,8 @@ for f in h5_files:
         # get the name of recording
         recording_name = f.split(".")[0]
         # change for enging in 66 rather than 64
-        recording_name = recording_name[0:len(recording_name)-2]+str(66)+".h5"
+        print("correct headstage number?")
+        recording_name = recording_name[0:len(recording_name)-2]+str(42)+".h5" # 66 en vez de 42
         time = McsData.RawData(home+"/"+recording_name)
         # extract the time from there
         time = time.recordings[0].analog_streams[0].get_channel_sample_timestamps(0, 0, to_idx)
@@ -84,10 +85,15 @@ for f in h5_files:
 
 
 
-    # create element of events
+    # create element of events. This is from the external stimulation system.
     # are there events? 
-    events = data.recordings[0].event_streams[0]
-    if len(events.event_entity) > 0:
+    try:
+        events = data.recordings[0].event_streams[0].event_entity[0].get_events(0)[0][0,:]
+    except TypeError:
+        print("no events detected")
+    except KeyError:
+        print("no events detected")
+    else:
         print("events detected")
             # GET the event detector and generator!!
         events = data.recordings[0].event_streams[0].event_entity[0].get_events(0)[0][0,:]
@@ -96,10 +102,6 @@ for f in h5_files:
         for e in events.round(2).tolist(): 
             index = np.where(signal_array["time"] == e )[0]
             signal_array["events"][index[0]] = 1
-    else :
-        print("no events detected")
-        
-        
 
      
     #signal_array.keys()
@@ -117,12 +119,17 @@ for f in h5_files:
     plt.plot(signal_array['time'],
              signal_array.iloc[:, 1:len(signal_array.columns)-2],
              zorder=1)
-    if isinstance(events, np.ndarray) :
-        plt.vlines(x= events, 
-                   ymin= signal_array["11"].min()*1.5,
-                   ymax= signal_array["11"].max()*1.5,
-                   colors = "black",
-                   zorder=2)
+    try:
+        events
+    except NameError:
+        print("no events to print")
+    else:
+        if isinstance(events, np.ndarray) :
+            plt.vlines(x= events, 
+                       ymin= signal_array["11"].min()*1.5,
+                       ymax= signal_array["11"].max()*1.5,
+                       colors = "black",
+                       zorder=2)
     plt.xlabel("seconds")
     plt.ylabel("mV")
     plt.savefig( batchFolder +"/"+ f.split(".")[0]+'_plot.pdf' )  
